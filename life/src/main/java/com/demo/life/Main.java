@@ -26,10 +26,6 @@ public final class Main {
         FoodSpawner spawner = new FoodSpawner(world);
         scheduler.scheduleAtFixedRate(spawner, 1000, 1000, TimeUnit.MILLISECONDS);
 
-        // Terminal stats — suppress ASCII render when GUI is active
-        Monitor monitor = new Monitor(world, false, !gui);
-        scheduler.scheduleAtFixedRate(monitor, 0, config.statsIntervalMs(), TimeUnit.MILLISECONDS);
-
         // CSV logger
         CsvStatsLogger csvLogger = null;
         if (csvPath != null) {

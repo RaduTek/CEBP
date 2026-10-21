@@ -122,14 +122,18 @@ public abstract non-sealed class Cell implements Entity, Runnable {
     protected void die() {
         int n = ThreadLocalRandom.current().nextInt(1, 6);
         world.grid.setOwn(pos, Food.UNIT);
+        int placed = 1;
         for (int i = 1; i < n; i++) {
             int freePos = world.grid.nearestFree(pos, Math.max(world.config.width(), world.config.height()));
             if (freePos < 0) break;
-            world.grid.tryPlace(freePos, Food.UNIT);
+            if (world.grid.tryPlace(freePos, Food.UNIT)) placed++;
         }
         state = CellState.DEAD;
         world.stats.deaths.increment();
         decrementAlive();
+        String type = (this instanceof AsexualCell) ? "A" : "S";
+        EventLog.log(world, String.format("%s#%d DIED     → %d food  (alive=%d)",
+            type, id, placed, world.stats.totalAlive()));
     }
 
     protected int pickNearest(List<Integer> positions, int from, ThreadLocalRandom rng) {

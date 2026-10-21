@@ -10,6 +10,7 @@ public final class World {
     public final Grid grid;
     public final Stats stats;
     public volatile boolean running = true;
+    public final long startNs = System.nanoTime();
 
     private final ExecutorService cellExecutor;
     private final AtomicLong idGenerator = new AtomicLong(1);

@@ -52,6 +52,8 @@ public final class AsexualCell extends Cell {
 
         // Parent exits: mark DEAD to prevent finally block in run() from double-clearing
         state = CellState.DEAD;
+        EventLog.log(world, String.format("A#%d DIVIDED  → A#%d, A#%d  (alive=%d)",
+            id, child1.id, child2.id, world.stats.totalAlive()));
         return true;
     }
 

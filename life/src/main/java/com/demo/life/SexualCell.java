@@ -179,6 +179,8 @@ public final class SexualCell extends Cell {
                 this.mealsSinceReproduction = 0;
                 this.ready = false;
 
+                EventLog.log(world, String.format("S#%d x S#%d MATED   → S#%d  (alive=%d)",
+                    first.id, second.id, child.id, world.stats.totalAlive()));
                 return true;
             } finally {
                 second.claimedBy.set(0);
