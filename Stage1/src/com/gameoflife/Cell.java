@@ -2,115 +2,133 @@ package com.gameoflife;
 
 import java.util.concurrent.ThreadLocalRandom;
 
-/**
- * A living cell executed as a task by the simulation's thread pool.
- *
- * <p>Lifecycle: after birth the cell is fed for {@code tFullMs}; it then gets
- * hungry and must consume a food unit within {@code tStarveMs} or it dies,
- * releasing between one and five food units back into the pool. After ten
- * successful meals the cell reproduces according to its type.</p>
- */
+/** A cell task that acts periodically in the shared world map. */
 public abstract class Cell implements Runnable {
-
     private static final java.util.concurrent.atomic.AtomicLong ID_GENERATOR =
             new java.util.concurrent.atomic.AtomicLong(1);
-
-    protected final long id;
-    protected final CellType type;
-    protected final SimulationEngine engine;
-    protected final ResourceManager resources;
-
-    protected volatile CellState state = CellState.ALIVE;
-    protected int mealsEaten;
     protected static final int MEALS_TO_REPRODUCE = 10;
 
+    protected final long id = ID_GENERATOR.getAndIncrement();
+    protected final CellType type;
+    protected final SimulationEngine engine;
+    protected volatile CellState state = CellState.HUNGRY;
+    private volatile Position position;
+    private volatile int mealsEaten;
+    private volatile long starvationDeadline;
+
     protected Cell(CellType type, SimulationEngine engine) {
-        this.id = ID_GENERATOR.getAndIncrement();
         this.type = type;
         this.engine = engine;
-        this.resources = engine.getResources();
-        this.mealsEaten = 0;
     }
 
+    protected abstract boolean reproduce();
+
     @Override
-    public void run() {
+    public final void run() {
+        starvationDeadline = System.currentTimeMillis() + engine.gettStarveMs();
         try {
-            while (!engine.isShutdown()) {
-                // Fed state: the last meal sustains the cell for tFullMs.
-                state = CellState.ALIVE;
-                sleepQuietly(engine.gettFullMs());
+            while (!engine.isShutdown() && state != CellState.DEAD) {
+                act();
+                sleepQuietly(engine.nextMoveIntervalMs());
+            }
+        } catch (RuntimeException e) {
+            System.err.println("Cell " + id + " failed: " + e.getMessage());
+            engine.getWorldMap().tryKill(this, "unexpected cell failure");
+        }
+    }
 
-                // Hungry state: try to secure a meal within tStarveMs.
-                state = CellState.HUNGRY;
-                boolean fed;
-                try {
-                    fed = resources.tryConsume(engine.gettStarveMs());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-                if (!fed) {
-                    die();
-                    return;
-                }
-                mealsEaten++;
-                engine.recordMeal();
+    private void act() {
+        if (engine.getWorldMap().tryStarve(this, System.currentTimeMillis()).status()
+                == WorldMap.DeathStatus.KILLED) return;
+        engine.getWorldMap().tryEatAtCurrentPosition(this);
+        Position current = getPosition();
+        if (current == null || state == CellState.DEAD) return;
 
-                if (mealsEaten >= MEALS_TO_REPRODUCE) {
-                    state = CellState.REPRODUCING;
-                    boolean reproduced = reproduce();
-                    if (reproduced) {
-                        mealsEaten = 0;
-                    }
-                    // On mating timeout the cell stays alive with its meal
-                    // count and retries after the next meal.
+        Position target = selectTarget(current);
+        Position destination = target == null ? randomNeighbor(current) : stepToward(current, target);
+        if (destination == null) return;
+        WorldMap.MoveResult result = engine.getWorldMap().tryMoveAndEat(this, destination);
+        if (result.status() == WorldMap.MoveStatus.MOVED_AND_ATE) {
+            maybeReproduce();
+        } else if (state == CellState.REPRODUCING) {
+            tryReproduce();
+        }
+    }
+
+    private Position selectTarget(Position current) {
+        if (state == CellState.REPRODUCING && type == CellType.SEXUAL) {
+            return engine.getWorldMap().findReproducingPartnersInView(this, engine.getFieldOfView())
+                    .stream().findFirst().map(WorldMap.CellView::position).orElse(null);
+        }
+        return engine.getWorldMap().findFoodInView(this, engine.getFieldOfView())
+                .stream().findFirst().map(WorldMap.FoodTarget::position).orElse(null);
+    }
+
+    private void maybeReproduce() {
+        if (mealsEaten >= MEALS_TO_REPRODUCE) {
+            state = CellState.REPRODUCING;
+            tryReproduce();
+        }
+    }
+
+    private void tryReproduce() {
+        if (type == CellType.SEXUAL) {
+            for (WorldMap.CellView view : engine.getWorldMap()
+                    .findReproducingPartnersInView(this, engine.getFieldOfView())) {
+                WorldMap.PairResult result = engine.getWorldMap().tryPairAndReproduce(
+                        this, engine.findCell(view.id()), () -> new SexualCell(engine));
+                if (result.success()) {
+                    engine.startOffspring(result.offspring());
+                    return;
                 }
             }
-        } finally {
-            if (state == CellState.DEAD) {
-                engine.unregisterCell(this);
+        } else {
+            WorldMap.BirthResult result = engine.getWorldMap().tryAsexualReproduce(
+                    this, () -> new AsexualCell(engine));
+            if (result.success()) {
+                for (Cell offspring : result.offspring()) engine.startOffspring(offspring);
             }
         }
     }
 
-    /**
-     * Type-specific reproduction; called after {@value #MEALS_TO_REPRODUCE} meals.
-     *
-     * @return {@code true} if reproduction completed (counter will be reset)
-     */
-    protected abstract boolean reproduce();
-
-    /** Marks the cell as dead and releases 1-5 food units back into the pool. */
-    protected void die() {
-        state = CellState.DEAD;
-        int released = ThreadLocalRandom.current().nextInt(1, 6);
-        resources.releaseFood(released);
-        engine.recordDeath();
+    private Position randomNeighbor(Position current) {
+        int dx = ThreadLocalRandom.current().nextInt(-1, 2);
+        int dy = ThreadLocalRandom.current().nextInt(-1, 2);
+        return dx == 0 && dy == 0 ? null : new Position(current.x() + dx, current.y() + dy);
     }
 
-    protected void sleepQuietly(long ms) {
+    private static Position stepToward(Position from, Position target) {
+        return new Position(from.x() + Integer.signum(target.x() - from.x()),
+                from.y() + Integer.signum(target.y() - from.y()));
+    }
+
+    protected void sleepQuietly(long milliseconds) {
         try {
-            Thread.sleep(ms);
+            Thread.sleep(milliseconds);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
 
-    public long getId() {
-        return id;
+    void setPosition(Position position) { this.position = position; }
+    void onMeal() {
+        mealsEaten++;
+        state = mealsEaten >= MEALS_TO_REPRODUCE ? CellState.REPRODUCING : CellState.ALIVE;
+        starvationDeadline = System.currentTimeMillis() + engine.gettFullMs() + engine.gettStarveMs();
     }
+    void markDead() { state = CellState.DEAD; }
+    void resetAfterReproduction() {
+        mealsEaten = 0;
+        state = CellState.HUNGRY;
+        starvationDeadline = System.currentTimeMillis() + engine.gettStarveMs();
+    }
+    long starvationDeadline() { return starvationDeadline; }
 
-    public CellType getType() {
-        return type;
-    }
-
-    public CellState getState() {
-        return state;
-    }
-
-    public int getMealsEaten() {
-        return mealsEaten;
-    }
+    public long getId() { return id; }
+    public CellType getType() { return type; }
+    public CellState getState() { return state; }
+    public int getMealsEaten() { return mealsEaten; }
+    public Position getPosition() { return engine.getWorldMap().getPosition(this); }
 
     @Override
     public String toString() {

@@ -1,4 +1,12 @@
 import com.gameoflife.SimulationEngine;
+import com.gameoflife.WorldView;
+
+import javax.swing.JFrame;
+import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+import java.awt.GraphicsEnvironment;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 
 /**
  * Entry point of the Game of Life simulation. All timing and population
@@ -35,6 +43,7 @@ public class Main {
         if (args.length > 0) {
             durationMs = Long.parseLong(args[0]);
         }
+        final long simulationDurationMs = durationMs;
 
         SimulationEngine.Config config = new SimulationEngine.Config(
                 T_FULL_MS,
@@ -52,14 +61,61 @@ public class Main {
         SimulationEngine engine = new SimulationEngine(config);
 
         System.out.println("Starting Game of Life simulation for " + durationMs + " ms...");
-        engine.run(durationMs);
+        engine.start();
 
+        if (GraphicsEnvironment.isHeadless()) {
+            System.err.println("No graphical Java environment is available; running without the map window.");
+            engine.runHeadless(simulationDurationMs);
+            printSummary(engine);
+            return;
+        }
+
+        SwingUtilities.invokeLater(() -> {
+            WorldView view = new WorldView(engine);
+            JFrame frame = new JFrame("Game of Life");
+            Timer repaintTimer = new Timer(50, event -> view.repaint());
+            frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+            frame.addWindowListener(new WindowAdapter() {
+                @Override
+                public void windowClosing(WindowEvent event) {
+                    repaintTimer.stop();
+                    try {
+                        engine.shutdown();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            });
+            frame.setContentPane(view);
+            frame.pack();
+            frame.setLocationRelativeTo(null);
+            frame.setVisible(true);
+            repaintTimer.start();
+        });
+
+        Thread simulation = new Thread(() -> {
+            try {
+                Thread.sleep(simulationDurationMs);
+                engine.shutdown();
+                SwingUtilities.invokeLater(() -> {
+                    for (java.awt.Window window : java.awt.Window.getWindows()) window.dispose();
+                    printSummary(engine);
+                });
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }, "simulation-duration");
+        simulation.start();
+        simulation.join();
+    }
+
+    private static void printSummary(SimulationEngine engine) {
         System.out.println();
         System.out.println("=== Simulation summary ===");
         System.out.println("Final population : " + engine.getPopulation());
         System.out.println("Total births      : " + engine.getBirths());
         System.out.println("Total deaths      : " + engine.getDeaths());
-        System.out.println("Food remaining    : " + engine.getResources().getAvailableFood());
+        System.out.println("Food remaining    : " + engine.getWorldMap().snapshot().food());
         System.out.println("Statistics written to " + STATS_FILE_NAME);
     }
 }
