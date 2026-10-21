@@ -8,6 +8,8 @@ public abstract non-sealed class Cell implements Entity, Runnable {
     public final World world;
     public volatile int pos;
     public volatile CellState state = CellState.HUNGRY;
+    public volatile long hungerDeadlineNs = 0;  // for visualizer: when starvation hits
+    public volatile long satedDeadlineNs = 0;   // for visualizer: when sated period ends
     int mealsSinceReproduction = 0; // thread-confined
 
     protected Cell(long id, World world, int pos) {
@@ -24,6 +26,7 @@ public abstract non-sealed class Cell implements Entity, Runnable {
                 // HUNGRY phase
                 state = CellState.HUNGRY;
                 long hungerDeadline = System.nanoTime() + world.config.tStarveMs() * 1_000_000L;
+                hungerDeadlineNs = hungerDeadline;
                 boolean eaten = false;
 
                 while (System.nanoTime() < hungerDeadline) {
@@ -76,6 +79,7 @@ public abstract non-sealed class Cell implements Entity, Runnable {
                 // SATED phase
                 state = CellState.SATED;
                 long satedDeadline = System.nanoTime() + world.config.tFullMs() * 1_000_000L;
+                satedDeadlineNs = satedDeadline;
 
                 while (System.nanoTime() < satedDeadline) {
                     if (!world.running || Thread.currentThread().isInterrupted()) return;

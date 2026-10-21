@@ -1,5 +1,6 @@
 package com.demo.life;
 
+import java.io.IOException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
@@ -7,11 +8,11 @@ import java.util.concurrent.TimeUnit;
 
 public final class Main {
     public static void main(String[] args) throws InterruptedException {
-        SimulationConfig config = parseArgs(args);
-        run(config);
+        Args parsed = parseArgs(args);
+        run(parsed.config, parsed.gui, parsed.csvPath);
     }
 
-    public static void run(SimulationConfig config) throws InterruptedException {
+    public static void run(SimulationConfig config, boolean gui, String csvPath) throws InterruptedException {
         World world = new World(config);
         placeInitialFood(world);
         placeInitialCells(world);
@@ -22,11 +23,31 @@ public final class Main {
             return t;
         });
 
-        Monitor monitor = new Monitor(world, false);
         FoodSpawner spawner = new FoodSpawner(world);
-
-        scheduler.scheduleAtFixedRate(monitor, 0, config.statsIntervalMs(), TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(spawner, 1000, 1000, TimeUnit.MILLISECONDS);
+
+        // Terminal stats — suppress ASCII render when GUI is active
+        Monitor monitor = new Monitor(world, false, !gui);
+        scheduler.scheduleAtFixedRate(monitor, 0, config.statsIntervalMs(), TimeUnit.MILLISECONDS);
+
+        // CSV logger
+        CsvStatsLogger csvLogger = null;
+        if (csvPath != null) {
+            try {
+                csvLogger = new CsvStatsLogger(world, csvPath);
+                CsvStatsLogger finalCsvLogger = csvLogger;
+                scheduler.scheduleAtFixedRate(finalCsvLogger, 0, config.statsIntervalMs(), TimeUnit.MILLISECONDS);
+                System.out.println("Logging stats to: " + csvPath);
+            } catch (IOException ex) {
+                System.err.println("Cannot open CSV file '" + csvPath + "': " + ex.getMessage());
+            }
+        }
+
+        // Swing GUI
+        if (gui) {
+            SwingGridView view = new SwingGridView(world);
+            view.start();
+        }
 
         long start = System.currentTimeMillis();
         while (System.currentTimeMillis() - start < config.runDurationMs()) {
@@ -42,6 +63,7 @@ public final class Main {
         world.awaitCellTermination(5000);
         scheduler.shutdown();
         scheduler.awaitTermination(2000, TimeUnit.MILLISECONDS);
+        if (csvLogger != null) csvLogger.close();
 
         System.out.println("\n=== Final Stats ===");
         StringBuilder sb = new StringBuilder();
@@ -50,6 +72,11 @@ public final class Main {
         int foodCount = world.grid.countMatching(e -> e == Food.UNIT);
         System.out.println("Food on grid: " + foodCount);
         System.out.println("Grid audit: " + auditGrid(world));
+    }
+
+    // Legacy entry point used by tests (no GUI, no CSV)
+    public static void run(SimulationConfig config) throws InterruptedException {
+        run(config, false, null);
     }
 
     private static void placeInitialFood(World world) {
@@ -102,35 +129,43 @@ public final class Main {
         return "FAIL (cells on grid=" + cellsOnGrid + " but alive counter=" + alive + ")";
     }
 
-    private static SimulationConfig parseArgs(String[] args) {
+    private record Args(SimulationConfig config, boolean gui, String csvPath) {}
+
+    private static Args parseArgs(String[] args) {
         int width = 40, height = 20;
         long moveDelayMs = 30, tFullMs = 500, tStarveMs = 1500, runDurationMs = 60000, statsIntervalMs = 1000;
         int mealsToReproduce = 10, visionRadius = 6, foodSpawnPerSecond = 15, initialAsexual = 20, initialSexual = 20;
         double initialFoodDensity = 0.15;
         boolean allowDiagonal = true, wrapAround = false;
+        boolean gui = true;
+        String csvPath = "simulation_stats.csv";
 
-        for (int i = 0; i < args.length - 1; i++) {
+        for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
-                case "--width" -> width = Integer.parseInt(args[++i]);
-                case "--height" -> height = Integer.parseInt(args[++i]);
-                case "--move-delay" -> moveDelayMs = Long.parseLong(args[++i]);
-                case "--t-full" -> tFullMs = Long.parseLong(args[++i]);
-                case "--t-starve" -> tStarveMs = Long.parseLong(args[++i]);
-                case "--meals-to-reproduce" -> mealsToReproduce = Integer.parseInt(args[++i]);
-                case "--vision-radius" -> visionRadius = Integer.parseInt(args[++i]);
-                case "--food-density" -> initialFoodDensity = Double.parseDouble(args[++i]);
-                case "--food-spawn" -> foodSpawnPerSecond = Integer.parseInt(args[++i]);
-                case "--initial-asexual" -> initialAsexual = Integer.parseInt(args[++i]);
-                case "--initial-sexual" -> initialSexual = Integer.parseInt(args[++i]);
-                case "--run-duration" -> runDurationMs = Long.parseLong(args[++i]);
-                case "--stats-interval" -> statsIntervalMs = Long.parseLong(args[++i]);
-                case "--no-diagonal" -> { allowDiagonal = false; i--; }
-                case "--wrap" -> { wrapAround = true; i--; }
+                case "--width"             -> width              = Integer.parseInt(args[++i]);
+                case "--height"            -> height             = Integer.parseInt(args[++i]);
+                case "--move-delay"        -> moveDelayMs        = Long.parseLong(args[++i]);
+                case "--t-full"            -> tFullMs            = Long.parseLong(args[++i]);
+                case "--t-starve"          -> tStarveMs          = Long.parseLong(args[++i]);
+                case "--meals-to-reproduce"-> mealsToReproduce   = Integer.parseInt(args[++i]);
+                case "--vision-radius"     -> visionRadius       = Integer.parseInt(args[++i]);
+                case "--food-density"      -> initialFoodDensity = Double.parseDouble(args[++i]);
+                case "--food-spawn"        -> foodSpawnPerSecond = Integer.parseInt(args[++i]);
+                case "--initial-asexual"   -> initialAsexual     = Integer.parseInt(args[++i]);
+                case "--initial-sexual"    -> initialSexual      = Integer.parseInt(args[++i]);
+                case "--run-duration"      -> runDurationMs      = Long.parseLong(args[++i]);
+                case "--stats-interval"    -> statsIntervalMs    = Long.parseLong(args[++i]);
+                case "--no-diagonal"       -> allowDiagonal      = false;
+                case "--wrap"              -> wrapAround         = true;
+                case "--no-gui"            -> gui                = false;
+                case "--csv"               -> csvPath            = args[++i];
+                case "--no-csv"            -> csvPath            = null;
             }
         }
 
-        return new SimulationConfig(width, height, moveDelayMs, tFullMs, tStarveMs, mealsToReproduce,
-                visionRadius, initialFoodDensity, foodSpawnPerSecond, initialAsexual, initialSexual,
-                runDurationMs, allowDiagonal, wrapAround, statsIntervalMs);
+        SimulationConfig config = new SimulationConfig(width, height, moveDelayMs, tFullMs, tStarveMs,
+                mealsToReproduce, visionRadius, initialFoodDensity, foodSpawnPerSecond, initialAsexual,
+                initialSexual, runDurationMs, allowDiagonal, wrapAround, statsIntervalMs);
+        return new Args(config, gui, csvPath);
     }
 }

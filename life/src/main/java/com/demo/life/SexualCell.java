@@ -24,6 +24,7 @@ public final class SexualCell extends Cell {
                 state = CellState.HUNGRY;
                 safeSetNotReady();
                 long hungerDeadline = System.nanoTime() + world.config.tStarveMs() * 1_000_000L;
+                hungerDeadlineNs = hungerDeadline;
                 boolean eaten = false;
 
                 while (System.nanoTime() < hungerDeadline) {
@@ -76,6 +77,7 @@ public final class SexualCell extends Cell {
                 // SATED phase
                 state = CellState.SATED;
                 long satedDeadline = System.nanoTime() + world.config.tFullMs() * 1_000_000L;
+                satedDeadlineNs = satedDeadline;
 
                 if (mealsSinceReproduction >= world.config.mealsToReproduce()) {
                     ready = true;
