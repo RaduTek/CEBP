@@ -16,7 +16,7 @@ public class ResourceManager {
     private final int capacity;
     private int currentFoodCount;
 
-    private final ReentrantLock lock = new ReentrantLock();
+    private final ReentrantLock lock = new ReentrantLock(true);
     private final Condition notEmpty = lock.newCondition();
 
     /**
@@ -28,7 +28,7 @@ public class ResourceManager {
             throw new IllegalArgumentException("capacity must be positive");
         }
         this.capacity = capacity;
-        this.currentFoodCount = Math.min(Math.max(initialFood, 0), capacity);
+        this.currentFoodCount = Math.clamp(initialFood, 0, capacity);
     }
 
     /**
