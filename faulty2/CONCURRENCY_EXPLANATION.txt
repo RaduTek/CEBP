@@ -1,0 +1,68 @@
+Concurrent Map: how the program works
+======================================
+
+Overview
+--------
+The program simulates a 48 by 30 map. Food is stored as an integer amount on
+each tile. Cells move around the map, look for nearby food, and try to eat it
+before their starvation deadline. A cell that eats ten times reproduces:
+asexual cells create another asexual cell, while sexual cells seek a nearby
+sexual partner and create one offspring together. A cell that fails to eat in
+time dies and drops some food on its tile.
+
+Each cell runs on its own Java thread. The simulation also has scheduled work
+for adding food and writing statistics. Swing's event-dispatch thread refreshes
+the map and statistics periodically. This means many threads can access shared
+simulation data at once.
+
+Colors in the map
+-----------------
+Green dots are food. A number on a green dot shows the amount on that tile when
+the map was painted. Blue dots are sexual cells, and orange dots are asexual
+cells. A hungry cell uses a darker shade of its type's color. Purple dots are
+cells currently reproducing. If several cells occupy one tile, the drawing
+offsets them slightly so they can be seen.
+
+Where concurrency is controlled
+--------------------------------
+The population registry is a ConcurrentHashMap, so cells can be registered
+and removed while other threads inspect it. Birth, death, and meal totals use
+atomic counters. A cell's position and lifecycle state are volatile, so other
+threads can see recent updates. Sexual pairing synchronizes on both cells in
+ascending ID order; this prevents two suitors from claiming the same partner
+and the consistent lock order avoids deadlock between those pair attempts.
+
+These measures protect those specific operations. They do not make every map
+observation a single, consistent snapshot: the UI can see values from different
+moments while the simulation continues to run.
+
+Intentional food race: food is not locked
+-----------------------------------------
+Food tiles and the shared total are plain integer fields in ResourceManager.
+There is deliberately no lock around eating. tryConsumeAt checks whether a
+tile has food, yields the thread, and then decrements the tile and total. If a
+tile contains one unit, two cell threads can both read that it is positive
+before either decrements it. Both then succeed in eating what was the same
+last unit. The tile and total can become negative, and the meal count can
+increase twice. This is the intended demonstration that an unlocked
+check-then-act sequence is not atomic.
+
+Food creation is also not protected. The scheduled food generator and dying
+cells can add food concurrently with eaters and each other. The capacity check
+and increments are separate operations too, so concurrent additions can lose
+updates or pass the capacity limit. The displayed total and per-tile amounts
+can disagree. The map renderer only draws a food dot when the copied tile
+amount is positive, so a negative amount appears as no dot even though the
+reported total may expose the race.
+
+Other concurrency effects
+-------------------------
+The renderer copies food and cell collections while worker threads keep
+changing them. Those copies are not atomic snapshots. The UI can briefly show
+a mixture of old and new positions, cell states, or food amounts. For example,
+a tile may be drawn before a cell moves there, or a food amount may change
+while the array is being copied. These are transient visualization effects.
+
+The registry, atomic counters, volatile cell fields, and synchronized mating
+claim reduce races in their own areas. They do not protect food: leaving food
+unlocked is intentional so multiple cells can race to eat the same unit.

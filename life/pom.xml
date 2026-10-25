@@ -45,7 +45,7 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.1.0</version>
                 <configuration>
-                    <mainClass>com.demo.life.Main</mainClass>
+                    <mainClass>com.gameoflife.Main</mainClass>
                 </configuration>
             </plugin>
         </plugins>
